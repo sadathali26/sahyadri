@@ -25,10 +25,10 @@
 </div>
 
 <script>
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (!SpeechRecognition) {
-    alert("Your browser does not support the Web Speech API. Please use Chrome.");
+    alert("Web Speech API not supported in this browser.");
 } else {
     const recognition = new SpeechRecognition();
     const toggleBtn = document.getElementById('toggleBtn');
@@ -37,81 +37,45 @@ if (!SpeechRecognition) {
 
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US'; 
-
-    // --- FIX: On-Device Check ---
-    async function startRecognition() {
-        // In 2026, we check if the language pack exists before forcing local processing
-        if ('available' in SpeechRecognition) {
-            const status = await SpeechRecognition.available({
-                langs: [recognition.lang],
-                processLocally: true
-            });
-
-            if (status === 'available') {
-                recognition.processLocally = true;
-                console.log("Using High-Speed On-Device Engine");
-            } else {
-                recognition.processLocally = false; // Fallback to Cloud
-                console.warn("Language pack not found. Falling back to Cloud Recognition.");
-            }
-        }
-        
-        try {
-            recognition.start();
-        } catch (e) {
-            statusDiv.innerText = "Error: Already started or blocked.";
-        }
-    }
+    
+    // FIX: Dynamically grab the exact language code your browser uses
+    recognition.lang = navigator.language || 'en-US'; 
 
     let isRecording = false;
-    let finalTranscript = '';
 
     recognition.onresult = (event) => {
-        let interimTranscript = '';
+        let final = '';
+        let interim = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
             if (event.results[i].isFinal) {
-                finalTranscript += event.results[i][0].transcript + ' ';
+                final += event.results[i][0].transcript + ' ';
             } else {
-                interimTranscript += event.results[i][0].transcript;
+                interim += event.results[i][0].transcript;
             }
         }
-        transcriptDiv.innerHTML = `<span>${finalTranscript}</span><span class="interim">${interimTranscript}</span>`;
+        transcriptDiv.innerHTML = `<span>${final}</span><span class="interim">${interim}</span>`;
     };
 
     recognition.onstart = () => {
-        statusDiv.innerText = "Status: Listening...";
+        statusDiv.innerText = `Status: Listening... (${recognition.lang})`;
         toggleBtn.innerText = "Stop Transcribing";
         toggleBtn.classList.add('recording');
         isRecording = true;
     };
 
     recognition.onerror = (event) => {
-        // If it still fails, tell the user why
-        if (event.error === 'language-not-supported') {
-            statusDiv.innerText = "Error: Language not supported. Try 'en-US'.";
-        } else {
-            statusDiv.innerText = `Error: ${event.error}`;
-        }
-        stopRecording();
+        statusDiv.innerText = `Error: ${event.error}`;
     };
 
-    recognition.onend = () => { stopRecording(); };
-
-    function stopRecording() {
+    recognition.onend = () => {
         statusDiv.innerText = "Status: Stopped";
         toggleBtn.innerText = "Start Transcribing";
         toggleBtn.classList.remove('recording');
         isRecording = false;
-    }
+    };
 
     toggleBtn.addEventListener('click', () => {
-        if (isRecording) {
-            recognition.stop();
-        } else {
-            finalTranscript = '';
-            startRecognition();
-        }
+        isRecording ? recognition.stop() : recognition.start();
     });
 }
 </script>
