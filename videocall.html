@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Interview Room</title>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+    <style>
+        body {
+            display: flex;
+            flex-direction: column; 
+            min-height: 100vh;
+            margin: 0;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f4ece4, #f1eadd, #f8f4e8, #faf2e9, #f5eedf);
+            background-attachment: fixed;
+            transition: background 0.8s ease, color 0.3s ease;
+            color: #ffffff; 
+            padding: 20px;
+        }
+
+        body.dark {
+            background: linear-gradient(135deg, #1f121f, #1c1620, #161221, #1a111d, #180e0f);
+            color: #ffffff; 
+        }
+
+        #header {
+            padding: 20px;
+            text-align: center;
+            color: #212529; /* Dark text for light mode */
+            transition: color 0.3s ease;
+        }
+
+        body.dark #header {
+            color: #ffffff; /* Light text for dark mode */
+        }
+
+        #video-container {
+            width: 100vw;
+            height: 85vh;
+        }
+
+        .floating-btn {
+            position: fixed;
+            top: 20px;
+            z-index: 1000;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            color: #212529;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.3s ease, color 0.3s ease;
+            padding: 10px;
+        }
+
+        .floating-btn .material-symbols-outlined {
+            font-size: 32px; 
+        }
+
+        .floating-btn:hover {
+            transform: scale(1.15);
+        }
+
+        .back-btn { left: 20px; }
+        .toggle-btn { right: 20px; }
+
+        body.dark .floating-btn { color: #ffffff; }
+    </style>
+</head>
+<body class="dark"> <button class="floating-btn back-btn" onclick="goBack()" title="Leave Meeting">
+        <span class="material-symbols-outlined">logout</span>
+    </button>
+
+    <button class="floating-btn toggle-btn" onclick="toggleDarkMode()" title="Toggle Theme">
+        <span class="material-symbols-outlined" id="theme-icon">wb_sunny</span>
+    </button>
+
+    <div id="header">
+        <h2>Live Interview Room</h2>
+    </div>
+
+    <div id="video-container"></div>
+
+    <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
+
+   <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
+<script>
+    window.onload = function () {
+        // 1. Get real user details from localStorage
+        const storedUserId = localStorage.getItem("userId");
+        const storedUserName = localStorage.getItem("userName");
+
+        const userID = storedUserId ? storedUserId : (Math.floor(Math.random() * 10000) + "");
+        const userName = storedUserName ? storedUserName : "Guest_" + userID;
+
+        // 2. Extract Room ID from URL
+        function getUrlParams(url) {
+            let urlStr = url.split('?')[1] || '';
+            return Object.fromEntries(new URLSearchParams(urlStr).entries());
+        }
+        
+        const urlParams = getUrlParams(window.location.href);
+        const roomID = urlParams['roomID'] || (Math.floor(Math.random() * 10000) + "");
+        const isParticipantLink = !!urlParams['roomID']; // Check if roomID was in the URL
+
+        // 3. ZegoCloud Credentials
+        const appID = 767996820; 
+        const serverSecret = "051753ef4d52dca77aa2f9bf2e0fec5c";
+
+        // 4. Generate Token
+        const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
+            appID, serverSecret, roomID, userID, userName
+        );
+
+        // 5. Initialize Call
+        const zp = ZegoUIKitPrebuilt.create(kitToken);
+        
+        zp.joinRoom({
+            container: document.querySelector("#video-container"),
+            sharedLinks: [{
+                name: 'Meeting Link',
+                url: window.location.protocol + '//' + window.location.host + window.location.pathname + '?roomID=' + roomID,
+            }],
+            scenario: {
+                mode: ZegoUIKitPrebuilt.VideoConference, 
+            },
+            turnOnMicrophoneWhenJoining: false, 
+            turnOnCameraWhenJoining: false,     
+            showMyCameraToggleButton: true,
+            showMyMicrophoneToggleButton: true,
+            showAudioVideoSettingsButton: true,
+            showScreenSharingButton: true,
+            showTextChat: true,
+            showUserList: true,
+            maxUsers: 2, 
+            layout: "Auto",
+        });
+
+        // 6. Start Transcription if this is the participant link
+        if (isParticipantLink) {
+            startSpeechToText(userID, userName, roomID);
+        } else {
+            // Optional: Connect as a receiver if this is the host link
+            receiveSpeechToText(roomID); 
+        }
+    };
+
+    // --- Transcription & WebSocket Logic ---
+
+    function startSpeechToText(userID, userName, roomID) {
+        // Replace with your actual WebSocket server URL
+// Change it to exactly this:
+const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev';        const socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+            console.log("Connected to WebSocket for transcription.");
+            // Register this connection to the specific room
+            socket.send(JSON.stringify({ type: 'join', roomID: roomID, role: 'sender' }));
+        };
+
+        // Initialize Speech Recognition
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            console.warn("Speech Recognition API is not supported in this browser.");
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;   // Keep listening continuously
+        recognition.interimResults = true; // Capture words as they are being spoken
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event) => {
+            let interimTranscript = '';
+            let finalTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                } else {
+                    interimTranscript += event.results[i][0].transcript;
+                }
+            }
+
+            const currentText = finalTranscript || interimTranscript;
+
+            // Send to WebSocket
+            if (socket.readyState === WebSocket.OPEN && currentText.trim() !== '') {
+                socket.send(JSON.stringify({
+                    type: 'transcription',
+                    roomID: roomID,
+                    userId: userID,
+                    userName: userName,
+                    text: currentText,
+                    isFinal: !!finalTranscript
+                }));
+            }
+        };
+
+        recognition.onerror = (event) => {
+            console.error("Speech recognition error:", event.error);
+        };
+
+        // Auto-restart if it stops unexpectedly
+        recognition.onend = () => {
+            console.log("Transcription paused, restarting...");
+            try { recognition.start(); } catch(e) {}
+        };
+
+        // Start listening
+        recognition.start();
+    }
+
+    function receiveSpeechToText(roomID) {
+        const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev'; 
+        const socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+            console.log("Connected to WebSocket to receive transcription.");
+            socket.send(JSON.stringify({ type: 'join', roomID: roomID, role: 'receiver' }));
+        };
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'transcription') {
+                console.log(`[${data.userName}]: ${data.text}`);
+                // You can append this text to a div in your HTML here!
+            }
+        };
+    }
+
+    // Theme Toggle
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark');
+        const themeIcon = document.getElementById('theme-icon');
+        themeIcon.textContent = document.body.classList.contains('dark') ? 'wb_sunny' : 'dark_mode'; 
+    }
+
+    // Leave meeting
+    function goBack() {
+        window.location.href = 'in-meet.html';
+    }
+</script>
+</body>
+</html>
