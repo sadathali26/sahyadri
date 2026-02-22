@@ -29,12 +29,12 @@
         #header {
             padding: 20px;
             text-align: center;
-            color: #212529; /* Dark text for light mode */
+            color: #212529;
             transition: color 0.3s ease;
         }
 
         body.dark #header {
-            color: #ffffff; /* Light text for dark mode */
+            color: #ffffff; 
         }
 
         #video-container {
@@ -71,11 +71,10 @@
 
         body.dark .floating-btn { color: #ffffff; }
 
-        /* --- SUBTITLE STYLES --- */
         #subtitles-container {
-            display: none; /* Hidden until someone speaks */
+            display: none; 
             position: fixed;
-            bottom: 60px; /* Floats near the bottom, above Zego controls */
+            bottom: 60px; 
             left: 50%;
             transform: translateX(-50%);
             background: rgba(0, 0, 0, 0.75);
@@ -89,8 +88,8 @@
             z-index: 9999;
             backdrop-filter: blur(4px);
             box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            pointer-events: none; /* Lets you click the video behind the text */
-            transition: opacity 0.3s ease; /* Smooth fade effect */
+            pointer-events: none; 
+            transition: opacity 0.3s ease; 
         }
     </style>
 </head>
@@ -114,12 +113,6 @@
     </div>
 
     <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
-
-   <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
-    <script src="https://cdn.WebRTC-Experiment.com/RecordRTC.js"></script>
-
-   <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
-    <script src="https://cdn.webrtc-experiment.com/RecordRTC.js"></script>
 
     <script>
         window.onload = function () {
@@ -163,94 +156,68 @@
                 layout: "Auto",
             });
 
-            // If this is the Host/Interviewer (No Room ID), capture the tab audio!
-            if (!isParticipantLink) {
-                // We add a tiny delay to let ZegoCloud load before asking to record the screen
-                setTimeout(() => startTabAudioTranscription(), 3000);
+            // If this is the CANDIDATE (Room ID exists), start the built-in microphone transcription
+            if (isParticipantLink) {
+                startContinuousDictation();
             }
         };
 
-        // --- Tab Audio & AssemblyAI Logic ---
+        // --- Pure Chrome STT Logic (No AssemblyAI) ---
         
-        // Keep your Ngrok URL!
-        const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev'; 
-
-        function startTabAudioTranscription() {
+        function startContinuousDictation() {
+            // NOTE: Make sure this Ngrok URL matches your current running terminal!
+            const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev'; 
             const socket = new WebSocket(wsUrl);
 
-            socket.onopen = () => {
-                console.log("Connected to Backend. Requesting Assembly Token...");
-                socket.send(JSON.stringify({ type: 'get_token' }));
-            };
+            socket.onopen = () => console.log("Connected to Python backend.");
 
-            socket.onmessage = async (event) => {
-                const data = JSON.parse(event.data);
-                
-                if (data.type === 'token') {
-                    console.log("Token Received! Prompting for Tab Audio capture...");
-                    
-                    try {
-                        // Prompt the interviewer to share the current tab to capture the candidate's voice
-                        const stream = await navigator.mediaDevices.getDisplayMedia({
-                            video: true,
-                            audio: true // CRITICAL: This captures the system/tab audio
-                        });
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn("Browser does not support Speech API.");
+                return;
+            }
 
-                        // Make sure they actually shared the audio
-                        const audioTrack = stream.getAudioTracks()[0];
-                        if (!audioTrack) {
-                            alert("You must check 'Share Tab Audio' to transcribe the candidate!");
-                            return;
-                        }
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = false; // Only send final, clean sentences
+            recognition.lang = 'en-US';
 
-                        // Connect to AssemblyAI
-                        const assemblySocket = new WebSocket(`wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000&token=${data.token}`);
-                        const audioStream = new MediaStream([audioTrack]);
-
-                        assemblySocket.onmessage = (assemblyEvent) => {
-                            const transcript = JSON.parse(assemblyEvent.data);
-                            if (!transcript.text) return;
-
-                            // Send completed sentences to the Python backend terminal
-                            if (transcript.message_type === 'FinalTranscript') {
-                                socket.send(JSON.stringify({
-                                    type: 'print_to_terminal',
-                                    text: transcript.text
-                                }));
-                            }
-                        };
-
-                        // Start sending chunks once Assembly is ready
-                        assemblySocket.onopen = () => {
-                            console.log("Listening to candidate...");
-                            const recorder = new RecordRTC(audioStream, {
-                                type: 'audio',
-                                mimeType: 'audio/webm;codecs=pcm',
-                                recorderType: RecordRTC.StereoAudioRecorder,
-                                timeSlice: 250, 
-                                desiredSampRate: 16000,
-                                numberOfAudioChannels: 1,
-                                ondataavailable: (blob) => {
-                                    const reader = new FileReader();
-                                    reader.onload = () => {
-                                        const base64data = reader.result.split(',')[1];
-                                        if (assemblySocket.readyState === WebSocket.OPEN) {
-                                            assemblySocket.send(JSON.stringify({ audio_data: base64data }));
-                                        }
-                                    };
-                                    reader.readAsDataURL(blob);
-                                }
-                            });
-                            recorder.startRecording();
-                        };
-                    } catch (err) {
-                        console.error("Tab capture failed:", err);
+            recognition.onresult = (event) => {
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
                     }
                 }
+                
+                // Beam the sentence directly to the backend terminal
+                if (finalTranscript.trim() !== '' && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        type: 'transcription',
+                        text: finalTranscript.trim()
+                    }));
+                }
             };
+
+            // THE INFINITE LOOP: Instantly restart if Chrome tries to pause
+            recognition.onend = () => {
+                setTimeout(() => {
+                    try { recognition.start(); } catch(e) {}
+                }, 100);
+            };
+
+            recognition.start();
         }
 
-        // ... (Keep toggleDarkMode and goBack functions) ...
+        function toggleDarkMode() {
+            document.body.classList.toggle('dark');
+            const themeIcon = document.getElementById('theme-icon');
+            themeIcon.textContent = document.body.classList.contains('dark') ? 'wb_sunny' : 'dark_mode'; 
+        }
+
+        function goBack() {
+            window.location.href = 'in-meet.html';
+        }
     </script>
 </body>
 </html>
