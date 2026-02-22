@@ -72,27 +72,8 @@
 
         body.dark .floating-btn { color: #ffffff; }
 
-        #start-stt-btn {
-            display: none; /* Hidden until candidate joins */
-            padding: 12px 24px;
-            font-size: 16px;
-            font-weight: bold;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            transition: background 0.3s;
-            margin-top: 10px;
-        }
-
-        #start-stt-btn:hover {
-            background: #45a049;
-        }
-
         #subtitles-container {
-            display: none; /* Hidden until listening starts */
+            display: none; /* Hidden until they click and start */
             position: fixed;
             bottom: 80px; 
             left: 50%;
@@ -123,9 +104,6 @@
 
     <div id="header">
         <h2>Live Interview Room</h2>
-        <button id="start-stt-btn" onclick="startContinuousDictation()">
-            🎤 Click Here to Start Transcriber
-        </button>
     </div>
 
     <div id="video-container"></div>
@@ -137,6 +115,9 @@
     <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
 
     <script>
+        let isParticipantLink = false;
+        let sttStarted = false; // To make sure we only start it once
+
         window.onload = function () {
             const storedUserId = localStorage.getItem("userId");
             const storedUserName = localStorage.getItem("userName");
@@ -153,12 +134,7 @@
             const roomID = urlParams['roomID'] || (Math.floor(Math.random() * 10000) + "");
             
             // True if Participant
-            const isParticipantLink = !!urlParams['roomID']; 
-
-            // Only show the Start button if this is the Candidate's link
-            if (isParticipantLink) {
-                document.getElementById('start-stt-btn').style.display = 'inline-block';
-            }
+            isParticipantLink = !!urlParams['roomID']; 
 
             // ZegoCloud Init
             const appID = 767996820; 
@@ -184,12 +160,18 @@
             });
         };
 
-        // --- Pure Chrome STT Logic ---
+        // SECRET TRAP: Wait for the user to click anywhere (like the Zego Join button)
+        // This legally bypasses Chrome's microphone security block without an extra button!
+        document.addEventListener('click', function() {
+            if (isParticipantLink && !sttStarted) {
+                sttStarted = true;
+                startContinuousDictation();
+            }
+        });
+
+        // --- Pure Chrome STT Logic (Pause & Block Detection) ---
         
         function startContinuousDictation() {
-            // Hide the button once clicked
-            document.getElementById('start-stt-btn').style.display = 'none';
-
             // ⚠️ Ensure this matches your active Ngrok URL!
             const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev';       
             const socket = new WebSocket(wsUrl);
@@ -197,45 +179,49 @@
             socket.onopen = () => console.log("Connected to Python backend.");
 
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                alert("Browser does not support Speech API. Please use Google Chrome.");
-                return;
-            }
-
             const recognition = new SpeechRecognition();
-            recognition.continuous = true;
             
-            // 🔥 TRUE: Sends small blocks of text continuously as you speak
+            // 🔥 FALSE: This tells Chrome to stop and pack the text the moment you pause!
+            recognition.continuous = false; 
             recognition.interimResults = true; 
             recognition.lang = 'en-US';
 
-            // Show the subtitle box on the screen
             const subtitleBox = document.getElementById('subtitles-container');
             const subtitleText = document.getElementById('subtitles-text');
             subtitleBox.style.display = 'block';
             subtitleText.innerText = "Listening...";
 
+            let finalBlock = ""; // Holds the sentence until you pause
+
             recognition.onresult = (event) => {
-                let transcript = '';
+                let interimText = '';
                 for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    transcript += event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {
+                        finalBlock += event.results[i][0].transcript;
+                    } else {
+                        interimText += event.results[i][0].transcript;
+                    }
                 }
                 
-                // 1. Show the text on the screen instantly
-                subtitleText.innerText = transcript;
-                console.log("HEARD:", transcript);
-
-                // 2. Send the small blocks to Python terminal
-                if (transcript.trim() !== '' && socket.readyState === WebSocket.OPEN) {
-                    socket.send(JSON.stringify({
-                        type: 'transcription',
-                        text: transcript.trim()
-                    }));
-                }
+                // Show the live typing on screen
+                subtitleText.innerText = finalBlock + interimText;
             };
 
-            // THE INFINITE LOOP: Instantly restart if Chrome tries to pause
+            // 🔥 When you pause, Chrome fires "onend"
             recognition.onend = () => {
+                // 1. Send that completed block to Python
+                if (finalBlock.trim() !== '' && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        type: 'transcription',
+                        text: finalBlock.trim()
+                    }));
+                    console.log("SENT TO BACKEND:", finalBlock);
+                }
+                
+                // 2. Clear the block out to prepare for the next sentence
+                finalBlock = ""; 
+
+                // 3. Instantly restart the microphone to catch the next words
                 setTimeout(() => {
                     try { recognition.start(); } catch(e) {}
                 }, 100);
