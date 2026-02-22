@@ -118,6 +118,9 @@
    <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
     <script src="https://cdn.WebRTC-Experiment.com/RecordRTC.js"></script>
 
+   <script src="https://unpkg.com/@zegocloud/zego-uikit-prebuilt/zego-uikit-prebuilt.js"></script>
+    <script src="https://cdn.webrtc-experiment.com/RecordRTC.js"></script>
+
     <script>
         window.onload = function () {
             const storedUserId = localStorage.getItem("userId");
@@ -133,9 +136,11 @@
             
             const urlParams = getUrlParams(window.location.href);
             const roomID = urlParams['roomID'] || (Math.floor(Math.random() * 10000) + "");
+            
+            // True if Participant, False if Interviewer
             const isParticipantLink = !!urlParams['roomID']; 
 
-            // ZegoCloud Initialization
+            // ZegoCloud Init
             const appID = 767996820; 
             const serverSecret = "051753ef4d52dca77aa2f9bf2e0fec5c";
             const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(appID, serverSecret, roomID, userID, userName);
@@ -148,8 +153,6 @@
                     url: window.location.protocol + '//' + window.location.host + window.location.pathname + '?roomID=' + roomID,
                 }],
                 scenario: { mode: ZegoUIKitPrebuilt.VideoConference },
-                turnOnMicrophoneWhenJoining: false, 
-                turnOnCameraWhenJoining: false,     
                 showMyCameraToggleButton: true,
                 showMyMicrophoneToggleButton: true,
                 showAudioVideoSettingsButton: true,
@@ -160,119 +163,94 @@
                 layout: "Auto",
             });
 
-            if (isParticipantLink) {
-                startAssemblyAITranscription(userID, userName, roomID);
-            } else {
-                receiveSpeechToText(roomID); 
+            // If this is the Host/Interviewer (No Room ID), capture the tab audio!
+            if (!isParticipantLink) {
+                // We add a tiny delay to let ZegoCloud load before asking to record the screen
+                setTimeout(() => startTabAudioTranscription(), 3000);
             }
         };
 
-        // --- AssemblyAI Transcription Logic ---
+        // --- Tab Audio & AssemblyAI Logic ---
         
-        // IMPORTANT: Replace this with your current Ngrok URL!
+        // Keep your Ngrok URL!
         const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev'; 
 
-        function startAssemblyAITranscription(userID, userName, roomID) {
+        function startTabAudioTranscription() {
             const socket = new WebSocket(wsUrl);
 
             socket.onopen = () => {
-                console.log("Connected to Python server. Requesting AssemblyAI token...");
-                // Join the room as a sender
-                socket.send(JSON.stringify({ type: 'join', roomID: roomID, role: 'sender' }));
-                // Ask for the API token
+                console.log("Connected to Backend. Requesting Assembly Token...");
                 socket.send(JSON.stringify({ type: 'get_token' }));
             };
 
             socket.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
                 
-                // When the server gives us the token, start recording!
                 if (data.type === 'token') {
-                    console.log("Token received! Connecting to AssemblyAI...");
+                    console.log("Token Received! Prompting for Tab Audio capture...");
                     
-                    // Open a direct connection to AssemblyAI using the secure token
-                    const assemblySocket = new WebSocket(`wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000&token=${data.token}`);
-
-                    assemblySocket.onmessage = (assemblyEvent) => {
-                        const transcript = JSON.parse(assemblyEvent.data);
-                        
-                        // AssemblyAI sends blank messages sometimes, ignore them
-                        if (!transcript.text) return;
-
-                        // Send the live text to our Python server to display on the interviewer's screen
-                        socket.send(JSON.stringify({
-                            type: 'transcription',
-                            roomID: roomID,
-                            userId: userID,
-                            userName: userName,
-                            text: transcript.text,
-                            isFinal: transcript.message_type === 'FinalTranscript'
-                        }));
-                    };
-
-                    // Capture the browser's microphone and stream it
-                    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-                        const recorder = new RecordRTC(stream, {
-                            type: 'audio',
-                            mimeType: 'audio/webm;codecs=pcm',
-                            recorderType: RecordRTC.StereoAudioRecorder,
-                            timeSlice: 250, // Send chunks every 250ms
-                            desiredSampRate: 16000,
-                            numberOfAudioChannels: 1,
-                            ondataavailable: (blob) => {
-                                // Convert audio chunk to base64 and send to AssemblyAI
-                                const reader = new FileReader();
-                                reader.onload = () => {
-                                    const base64data = reader.result.split(',')[1];
-                                    if (assemblySocket.readyState === WebSocket.OPEN) {
-                                        assemblySocket.send(JSON.stringify({ audio_data: base64data }));
-                                    }
-                                };
-                                reader.readAsDataURL(blob);
-                            }
+                    try {
+                        // Prompt the interviewer to share the current tab to capture the candidate's voice
+                        const stream = await navigator.mediaDevices.getDisplayMedia({
+                            video: true,
+                            audio: true // CRITICAL: This captures the system/tab audio
                         });
-                        recorder.startRecording();
-                    }).catch((err) => console.error("Mic access denied:", err));
+
+                        // Make sure they actually shared the audio
+                        const audioTrack = stream.getAudioTracks()[0];
+                        if (!audioTrack) {
+                            alert("You must check 'Share Tab Audio' to transcribe the candidate!");
+                            return;
+                        }
+
+                        // Connect to AssemblyAI
+                        const assemblySocket = new WebSocket(`wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000&token=${data.token}`);
+                        const audioStream = new MediaStream([audioTrack]);
+
+                        assemblySocket.onmessage = (assemblyEvent) => {
+                            const transcript = JSON.parse(assemblyEvent.data);
+                            if (!transcript.text) return;
+
+                            // Send completed sentences to the Python backend terminal
+                            if (transcript.message_type === 'FinalTranscript') {
+                                socket.send(JSON.stringify({
+                                    type: 'print_to_terminal',
+                                    text: transcript.text
+                                }));
+                            }
+                        };
+
+                        // Start sending chunks once Assembly is ready
+                        assemblySocket.onopen = () => {
+                            console.log("Listening to candidate...");
+                            const recorder = new RecordRTC(audioStream, {
+                                type: 'audio',
+                                mimeType: 'audio/webm;codecs=pcm',
+                                recorderType: RecordRTC.StereoAudioRecorder,
+                                timeSlice: 250, 
+                                desiredSampRate: 16000,
+                                numberOfAudioChannels: 1,
+                                ondataavailable: (blob) => {
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                        const base64data = reader.result.split(',')[1];
+                                        if (assemblySocket.readyState === WebSocket.OPEN) {
+                                            assemblySocket.send(JSON.stringify({ audio_data: base64data }));
+                                        }
+                                    };
+                                    reader.readAsDataURL(blob);
+                                }
+                            });
+                            recorder.startRecording();
+                        };
+                    } catch (err) {
+                        console.error("Tab capture failed:", err);
+                    }
                 }
             };
         }
 
-        function receiveSpeechToText(roomID) {
-            const socket = new WebSocket(wsUrl);
-            let subtitleTimeout; 
-
-            socket.onopen = () => {
-                console.log("Connected to Python server as Receiver.");
-                socket.send(JSON.stringify({ type: 'join', roomID: roomID, role: 'receiver' }));
-            };
-
-            socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                
-                if (data.type === 'transcription') {
-                    const subtitlesContainer = document.getElementById('subtitles-container');
-                    const subtitlesText = document.getElementById('subtitles-text');
-                    
-                    subtitlesContainer.style.display = 'block'; 
-                    subtitlesText.innerHTML = `<strong>${data.userName}:</strong> ${data.text}`; 
-                    
-                    clearTimeout(subtitleTimeout);
-                    subtitleTimeout = setTimeout(() => {
-                        subtitlesContainer.style.display = 'none';
-                    }, 4000);
-                }
-            };
-        }
-
-        function toggleDarkMode() {
-            document.body.classList.toggle('dark');
-            const themeIcon = document.getElementById('theme-icon');
-            themeIcon.textContent = document.body.classList.contains('dark') ? 'wb_sunny' : 'dark_mode'; 
-        }
-
-        function goBack() {
-            window.location.href = 'in-meet.html';
-        }
+        // ... (Keep toggleDarkMode and goBack functions) ...
     </script>
 </body>
 </html>
