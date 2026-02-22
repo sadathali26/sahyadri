@@ -166,7 +166,7 @@
         
         function startContinuousDictation() {
             // NOTE: Make sure this Ngrok URL matches your current running terminal!
-            const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev'; 
+            const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev';       
             const socket = new WebSocket(wsUrl);
 
             socket.onopen = () => console.log("Connected to Python backend.");
