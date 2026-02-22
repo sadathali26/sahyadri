@@ -27,10 +27,11 @@
         }
 
         #header {
-            padding: 20px;
+            padding: 10px;
             text-align: center;
             color: #212529;
             transition: color 0.3s ease;
+            z-index: 100;
         }
 
         body.dark #header {
@@ -71,25 +72,43 @@
 
         body.dark .floating-btn { color: #ffffff; }
 
+        #start-stt-btn {
+            display: none; /* Hidden until candidate joins */
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            transition: background 0.3s;
+            margin-top: 10px;
+        }
+
+        #start-stt-btn:hover {
+            background: #45a049;
+        }
+
         #subtitles-container {
-            display: none; 
+            display: none; /* Hidden until listening starts */
             position: fixed;
-            bottom: 60px; 
+            bottom: 80px; 
             left: 50%;
             transform: translateX(-50%);
             background: rgba(0, 0, 0, 0.75);
             color: #ffffff;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 20px;
+            padding: 15px 30px;
+            border-radius: 12px;
+            font-size: 22px;
             font-weight: 500;
             max-width: 80%;
             text-align: center;
             z-index: 9999;
             backdrop-filter: blur(4px);
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
             pointer-events: none; 
-            transition: opacity 0.3s ease; 
         }
     </style>
 </head>
@@ -104,6 +123,9 @@
 
     <div id="header">
         <h2>Live Interview Room</h2>
+        <button id="start-stt-btn" onclick="startContinuousDictation()">
+            🎤 Click Here to Start Transcriber
+        </button>
     </div>
 
     <div id="video-container"></div>
@@ -130,8 +152,13 @@
             const urlParams = getUrlParams(window.location.href);
             const roomID = urlParams['roomID'] || (Math.floor(Math.random() * 10000) + "");
             
-            // True if Participant, False if Interviewer
+            // True if Participant
             const isParticipantLink = !!urlParams['roomID']; 
+
+            // Only show the Start button if this is the Candidate's link
+            if (isParticipantLink) {
+                document.getElementById('start-stt-btn').style.display = 'inline-block';
+            }
 
             // ZegoCloud Init
             const appID = 767996820; 
@@ -155,17 +182,15 @@
                 maxUsers: 2, 
                 layout: "Auto",
             });
-
-            // If this is the CANDIDATE (Room ID exists), start the built-in microphone transcription
-            if (isParticipantLink) {
-                startContinuousDictation();
-            }
         };
 
-        // --- Pure Chrome STT Logic (No AssemblyAI) ---
+        // --- Pure Chrome STT Logic ---
         
         function startContinuousDictation() {
-            // NOTE: Make sure this Ngrok URL matches your current running terminal!
+            // Hide the button once clicked
+            document.getElementById('start-stt-btn').style.display = 'none';
+
+            // ⚠️ Ensure this matches your active Ngrok URL!
             const wsUrl = 'wss://luteotropic-gale-cynical.ngrok-free.dev';       
             const socket = new WebSocket(wsUrl);
 
@@ -173,16 +198,22 @@
 
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
-                console.warn("Browser does not support Speech API.");
+                alert("Browser does not support Speech API. Please use Google Chrome.");
                 return;
             }
 
             const recognition = new SpeechRecognition();
             recognition.continuous = true;
             
-            // 🔥 CHANGED TO TRUE: Send every guessed word instantly
+            // 🔥 TRUE: Sends small blocks of text continuously as you speak
             recognition.interimResults = true; 
             recognition.lang = 'en-US';
+
+            // Show the subtitle box on the screen
+            const subtitleBox = document.getElementById('subtitles-container');
+            const subtitleText = document.getElementById('subtitles-text');
+            subtitleBox.style.display = 'block';
+            subtitleText.innerText = "Listening...";
 
             recognition.onresult = (event) => {
                 let transcript = '';
@@ -190,10 +221,11 @@
                     transcript += event.results[i][0].transcript;
                 }
                 
-                // 🔥 PRINT TO BROWSER CONSOLE SO YOU CAN SEE IF IT HEARS YOU
+                // 1. Show the text on the screen instantly
+                subtitleText.innerText = transcript;
                 console.log("HEARD:", transcript);
 
-                // Beam the live text to the backend terminal
+                // 2. Send the small blocks to Python terminal
                 if (transcript.trim() !== '' && socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({
                         type: 'transcription',
